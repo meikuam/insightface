@@ -330,9 +330,9 @@ class SCRFDHead(AnchorHead):
             #    bbox_pred = bbox_pred.reshape(1, 4, -1).permute(0, 2, 1)
             #kps_pred = kps_pred.reshape(1, 10, -1).permute(0, 2, 1)
 
-            cls_score = cls_score.permute(2, 3, 0, 1).reshape(-1, self.cls_out_channels).sigmoid()
-            bbox_pred = bbox_pred.permute(2, 3, 0, 1).reshape(-1, 4)
-            kps_pred = kps_pred.permute(2,3,0,1).reshape(-1, 10)
+            cls_score = cls_score.permute(2, 3, 0, 1).reshape(x.size(0), -1, self.cls_out_channels).sigmoid()
+            bbox_pred = bbox_pred.permute(2, 3, 0, 1).reshape(x.size(0), -1, 4)
+            kps_pred = kps_pred.permute(2,3,0,1).reshape(x.size(0), -1, 10)
         return cls_score, bbox_pred, kps_pred
 
     def forward_train(self,
