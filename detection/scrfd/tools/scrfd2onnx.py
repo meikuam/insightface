@@ -6,7 +6,7 @@ import onnx
 import os
 #import onnxruntime as rt
 import torch
-
+from typing import List
 from mmdet.core import (build_model_from_cfg, generate_inputs_and_wrap_model,
                         preprocess_example_input)
 
@@ -24,7 +24,8 @@ def pytorch2onnx(config_path,
                  dynamic = True,
                  normalize_cfg=None,
                  dataset='coco',
-                 test_img=None):
+                 test_img=None,
+                 add_imnormalize=True):
 
     input_config = {
         'input_shape': input_shape,
@@ -44,6 +45,36 @@ def pytorch2onnx(config_path,
     model, tensor_data = generate_inputs_and_wrap_model(
         config_path, checkpoint_path, input_config)
 
+    if add_imnormalize and normalize_cfg is not None:
+        """add mmcv.imnormalize to model to replace float32 input to uint8"""
+
+        class ImnormalizeWrapper(torch.nn.Module):
+            def __init__(self, model, mean, std):
+                super(ImnormalizeWrapper, self).__init__()
+                self.model = model
+                self.mean = torch.tensor(mean).float().view(1, -1, 1, 1)
+                self.std = torch.tensor(std).float().view(1, -1, 1, 1)
+
+            def forward(self, images: torch.Tensor):
+                """
+                images: have shape (B, C, H, W)
+                """
+                images = (images.float() - self.mean) / self.std
+                return self.model([images])
+
+
+        model = ImnormalizeWrapper(
+            model=model,
+            mean=normalize_cfg['mean'],
+            std=normalize_cfg['std']
+        )
+        model.cpu().eval()
+
+        # denorm tensor_data
+        std = torch.tensor(normalize_cfg['std']).float().view(1, -1, 1, 1)
+        mean = torch.tensor(normalize_cfg['mean']).float().view(1, -1, 1, 1)
+        tensor_data = (tensor_data[0] * std - mean).byte()
+
     if tmp_ckpt_file is not None:
         os.remove(tmp_ckpt_file)
 
@@ -55,15 +86,32 @@ def pytorch2onnx(config_path,
         model,
         tensor_data,
         ori_output_file,
+        input_names=['input'],
+        output_names=['scores0', 'scores1', 'scores2', 'bboxes0', 'bboxes1', 'bboxes2'],
+        dynamic_axes={
+            'input': {0: 'batch_size', 2: '?', 3: '?'} if dynamic else {0: 'batch_size'}, #, 2: input_shape[2], 3: input_shape[3]},
+            'scores0': {0: 'batch_size', 1: '?'},
+            'scores1': {0: 'batch_size', 1: '?'},
+            'scores2': {0: 'batch_size', 1: '?'},
+            'bboxes0': {0: 'batch_size', 1: '?'},
+            'bboxes1': {0: 'batch_size', 1: '?'},
+            'bboxes2': {0: 'batch_size', 1: '?'},
+        },
         keep_initializers_as_inputs=False,
         verbose=False,
         opset_version=opset_version)
+
+    print(ori_output_file)
     if simplify or dynamic:
         model = onnx.load(ori_output_file)
         if dynamic:
             model.graph.input[0].type.tensor_type.shape.dim[2].dim_param = '?'
             model.graph.input[0].type.tensor_type.shape.dim[3].dim_param = '?'
+            print('model dynamic input',  model.graph.input[0].type.tensor_type.shape)
+        else:
+            print('model fixed input', model.graph.input[0].type.tensor_type.shape)
         if simplify:
+            print('use simplify')
             from onnxsim import simplify
             #print(model.graph.input[0])
             if dynamic:
@@ -127,7 +175,7 @@ if __name__ == '__main__':
 
     if not args.input_img:
         args.input_img = osp.join(
-            osp.dirname(__file__), '../tests/data/t1.jpg')
+            osp.dirname(__file__), '../../../python-package/insightface/data/images/t1.jpg')
 
     if len(args.shape) == 1:
         input_shape = (1, 3, args.shape[0], args.shape[0])
@@ -175,4 +223,6 @@ if __name__ == '__main__':
         dynamic = dynamic,
         normalize_cfg=normalize_cfg,
         dataset=args.dataset,
-        test_img=args.test_img)
+        test_img=args.test_img,
+        add_imnormalize=True
+    )
