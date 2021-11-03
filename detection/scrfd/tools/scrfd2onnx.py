@@ -44,7 +44,7 @@ def pytorch2onnx(config_path,
 
     model, tensor_data = generate_inputs_and_wrap_model(
         config_path, checkpoint_path, input_config)
-
+    num_levels = len(model.bbox_head.anchor_generator.strides)
     if add_imnormalize and normalize_cfg is not None:
         """add mmcv.imnormalize to model to replace float32 input to uint8"""
 
@@ -82,21 +82,24 @@ def pytorch2onnx(config_path,
         ori_output_file = output_file.split('.')[0]+"_ori.onnx"
     else:
         ori_output_file = output_file
+
+    output_names = []
+    dynamic_axes = {'input': {0: 'batch_size', 2: '?', 3: '?'}}
+    for level in range(num_levels):
+        output_name = f"scores{level}"
+        output_names.append(output_name)
+        dynamic_axes[output_name] = {0: 'batch_size', 1: '?'}
+    for level in range(num_levels):
+        output_name = f"bboxes{level}"
+        output_names.append(output_name)
+        dynamic_axes[output_name] = {0: 'batch_size', 1: '?'}
     torch.onnx.export(
         model,
         tensor_data,
         ori_output_file,
         input_names=['input'],
-        output_names=['scores0', 'scores1', 'scores2', 'bboxes0', 'bboxes1', 'bboxes2'],
-        dynamic_axes={
-            'input': {0: 'batch_size', 2: '?', 3: '?'} if dynamic else {0: 'batch_size'}, #, 2: input_shape[2], 3: input_shape[3]},
-            'scores0': {0: 'batch_size', 1: '?'},
-            'scores1': {0: 'batch_size', 1: '?'},
-            'scores2': {0: 'batch_size', 1: '?'},
-            'bboxes0': {0: 'batch_size', 1: '?'},
-            'bboxes1': {0: 'batch_size', 1: '?'},
-            'bboxes2': {0: 'batch_size', 1: '?'},
-        },
+        output_names=output_names,
+        dynamic_axes=dynamic_axes if dynamic else None,
         keep_initializers_as_inputs=False,
         verbose=False,
         opset_version=opset_version)
